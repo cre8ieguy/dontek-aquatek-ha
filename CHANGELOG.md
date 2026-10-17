@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- If the Dontek cloud can't be reached when Home Assistant starts, setup is now retried
+  automatically instead of the integration staying failed until reloaded.
+- Loads on Home Assistant 2024.1-2024.3 again (the config flow imported a name that only
+  exists from 2024.4).
+- Changes made from Home Assistant are no longer silently lost when the cloud connection
+  has just dropped: the integration waits for the reconnect and shows an error if the
+  command still can't be sent.
+- Toggling two Filter Time switches in quick succession no longer turns the first one
+  back off (they share one register).
+- A slow refresh can no longer overlap the next one, and a write and a refresh can't both
+  rebuild the connection at the same time.
+- `paho-mqtt` is listed in the manifest requirements; the coordinator now calls Home
+  Assistant's own shutdown when unloading.
+
 ## [0.7.0] - 2026-10-06
 
 ### Added
