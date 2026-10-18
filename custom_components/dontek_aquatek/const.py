@@ -11,8 +11,26 @@ DEFAULT_NAME = "Pool Pump"
 DEFAULT_SCAN_INTERVAL = 30  # seconds between full register reads
 
 # --- Register map (reverse engineered; all values are unsigned 16-bit) ---
-# Water temperature is fixed-point Q8.8: degrees C = raw / 256.
+# Water temperature in half-degrees (56 = 28.0 C); registers 55 and 57 mirror
+# it. This is what the app shows on Aquatek (fw 1.17B1, checked 2026-10-18)
+# and Oasis units.
+REG_WATER_TEMP_HALF = 79
+# Older mapping, fixed-point Q8.8 (degrees C = raw / 256). Reads 0 on the
+# units above; kept as a fallback for controllers without register 79.
 REG_WATER_TEMP = 57545
+
+
+def water_temp_c(regs: dict[int, int]) -> float | None:
+    """Water temperature in C from whichever register this controller fills."""
+    half = regs.get(REG_WATER_TEMP_HALF)
+    if half:
+        return half / 2
+    raw = regs.get(REG_WATER_TEMP)
+    if raw:
+        return round(raw / 256, 1)
+    if half is None and raw is None:
+        return None
+    return 0.0
 
 # Pump run mode.
 REG_PUMP_MODE = 65485

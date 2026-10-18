@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Water temperature now reads register 79 (half-degrees), which is what the app shows.
+  On an Aquatek with firmware 1.17B1 register 57545 reads 0, so Home Assistant showed a
+  wrong value. 57545 is still used as a fallback on controllers without register 79.
+
 ## [0.7.1] - 2026-10-18
 
 ### Fixed
