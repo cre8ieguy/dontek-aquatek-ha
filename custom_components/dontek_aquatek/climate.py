@@ -21,7 +21,7 @@ from .const import (
     REG_HEATER_ACTIVE,
     REG_HEATER_ON,
     REG_HEATER_SETPOINT,
-    REG_WATER_TEMP,
+    water_temp_c,
 )
 from .coordinator import DontekCoordinator
 from .entity import DontekEntity
@@ -82,10 +82,7 @@ class HeaterClimate(DontekEntity, ClimateEntity):
 
     @property
     def current_temperature(self) -> float | None:
-        raw = self.reg(REG_WATER_TEMP)
-        if raw is None:
-            return None
-        return round(raw / 256, 1)
+        return water_temp_c(self.coordinator.data or {})
 
     @property
     def target_temperature(self) -> float | None:

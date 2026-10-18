@@ -16,9 +16,9 @@ from .const import (
     MODE_TO_STR,
     REG_PUMP_MODE,
     REG_RUN_STATE,
-    REG_WATER_TEMP,
     RUN_STATE,
     RUN_STATE_RUNNING,
+    water_temp_c,
 )
 from .coordinator import DontekCoordinator
 from .entity import DontekEntity
@@ -39,7 +39,7 @@ async def async_setup_entry(
 
 
 class WaterTemperatureSensor(DontekEntity, SensorEntity):
-    """Pool water temperature (register 57545, Q8.8 fixed point)."""
+    """Pool water temperature (register 79 in half-degrees, or 57545 Q8.8)."""
 
     _attr_translation_key = "water_temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -52,10 +52,7 @@ class WaterTemperatureSensor(DontekEntity, SensorEntity):
 
     @property
     def native_value(self) -> float | None:
-        raw = self.reg(REG_WATER_TEMP)
-        if raw is None:
-            return None
-        return round(raw / 256, 1)
+        return water_temp_c(self.coordinator.data or {})
 
 
 class PumpStatusSensor(DontekEntity, SensorEntity):
