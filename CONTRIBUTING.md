@@ -44,6 +44,13 @@ Please **redact your serial / MAC** in anything you post publicly.
   **HACS** validator on every push.
 - Use clear, conventional commit messages.
 
+## Releasing (maintainer)
+
+Bump `"version"` in `custom_components/dontek_aquatek/manifest.json` and rename the
+changelog's `## [Unreleased]` heading to `## [x.y.z] - YYYY-MM-DD`. When that lands on
+`main`, the **Release** workflow tags `vx.y.z` and publishes the GitHub release with the
+changelog section as its notes; HACS then offers the update.
+
 ## Scope & safety
 
 This project only reads and writes the controller the user configures. Please don't add
