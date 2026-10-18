@@ -59,16 +59,10 @@ class FilterTimeEnableSwitch(DontekEntity, SwitchEntity):
         return bool(mask & self._bit)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        mask = self.reg(REG_FT_ENABLE_MASK) or 0
-        await self.coordinator.async_write_register(
-            REG_FT_ENABLE_MASK, (mask | self._bit) & 0xFFFF
-        )
+        await self.coordinator.async_update_bits(REG_FT_ENABLE_MASK, self._bit, 0)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        mask = self.reg(REG_FT_ENABLE_MASK) or 0
-        await self.coordinator.async_write_register(
-            REG_FT_ENABLE_MASK, mask & ~self._bit & 0xFFFF
-        )
+        await self.coordinator.async_update_bits(REG_FT_ENABLE_MASK, 0, self._bit)
 
 
 class RegisterSwitch(DontekEntity, SwitchEntity):

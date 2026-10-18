@@ -55,6 +55,10 @@ class CognitoError(Exception):
     """Raised when guest credentials cannot be obtained."""
 
 
+class DontekWriteError(Exception):
+    """Raised when a write could not be sent to the controller."""
+
+
 def _cognito_call(target: str, payload: dict) -> dict:
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -155,6 +159,10 @@ class DontekClient:
         self._creds: dict | None = None
         self._creds_at = 0.0
         self._lock = threading.Lock()
+        # one write at a time: read-modify-write callers rely on it
+        self.write_lock = threading.RLock()
+        # stops a write and a poll from both rebuilding the session at once
+        self._session_lock = threading.Lock()
         self._on_update: Callable[[dict[int, int]], None] | None = None
 
     def set_update_callback(self, cb: Callable[[dict[int, int]], None]) -> None:
@@ -247,13 +255,6 @@ class DontekClient:
             self._on_update(changed)
 
     # -- credential refresh ----------------------------------------------
-    def _ensure_fresh(self) -> None:
-        if time.time() - self._creds_at > _CREDS_TTL or not self.connected:
-            _LOGGER.debug("Dontek %s refreshing session", self.mac)
-            self.disconnect()
-            self.connect()
-            time.sleep(2)
-
     def _wait_connected(self, tries: int = 20) -> None:
         for _ in range(tries):
             if self.connected:
@@ -262,23 +263,37 @@ class DontekClient:
 
     def ensure_session(self) -> None:
         """Reconnect if the flag says we're down or the signed creds are stale."""
-        if not self.connected or time.time() - self._creds_at > _CREDS_TTL:
-            self.disconnect()
-            self.connect()
-            self._wait_connected()
+        with self._session_lock:
+            if not self.connected or time.time() - self._creds_at > _CREDS_TTL:
+                self.disconnect()
+                self.connect()
+                self._wait_connected()
 
     def reconnect(self) -> None:
         """Force a fresh session with newly signed credentials."""
         _LOGGER.debug("Dontek %s forcing reconnect", self.mac)
-        self.disconnect()
-        self.connect()
-        self._wait_connected()
+        with self._session_lock:
+            self.disconnect()
+            self.connect()
+            self._wait_connected()
 
     # -- protocol ---------------------------------------------------------
     def _publish(self, payload: dict) -> None:
-        self._ensure_fresh()
-        if self._client:
-            self._client.publish(self.cmd_topic, json.dumps(payload), qos=0)
+        """Send a command, reconnecting first if needed. Raises if it can't be sent.
+
+        QoS 0 messages published while paho is not connected are dropped
+        without error, so wait for the connection and check the result.
+        """
+        try:
+            self.ensure_session()
+        except Exception as err:  # noqa: BLE001 - Cognito / network failure
+            raise DontekWriteError(f"Cannot reach the Dontek cloud: {err}") from err
+        client = self._client
+        if client is None or not self.connected:
+            raise DontekWriteError("Not connected to the Dontek cloud")
+        info = client.publish(self.cmd_topic, json.dumps(payload), qos=0)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise DontekWriteError(f"Publish failed (rc={info.rc})")
 
     def request_all(self) -> None:
         """Ask the controller to dump its full register table."""
@@ -291,6 +306,11 @@ class DontekClient:
 
     def write_register(self, reg: int, value: int) -> None:
         """Write a single 16-bit register, then re-read state."""
-        self._publish({"messageId": "write", "modbusReg": int(reg), "modbusVal": [int(value)]})
-        time.sleep(0.5)
-        self.request_all()
+        reg, value = int(reg), int(value) & 0xFFFF
+        with self.write_lock:
+            self._publish({"messageId": "write", "modbusReg": reg, "modbusVal": [value]})
+            # keep the local copy current so a follow-up read-modify-write sees
+            # this value; the re-read below replaces it with the device's view
+            self.registers[reg] = value
+            time.sleep(0.5)
+            self.request_all()

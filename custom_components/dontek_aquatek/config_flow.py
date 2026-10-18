@@ -5,7 +5,12 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigFlow
+
+try:
+    from homeassistant.config_entries import ConfigFlowResult
+except ImportError:  # HA < 2024.4
+    from homeassistant.data_entry_flow import FlowResult as ConfigFlowResult
 
 from .const import CONF_MAC, CONF_NAME, CONF_SERIAL, DEFAULT_NAME, DOMAIN
 from .dontek_client import DontekClient, serial_to_mac

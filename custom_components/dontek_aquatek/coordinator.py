@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -21,7 +23,7 @@ from .const import (
     RUNONCE_DEFAULT_MIN,
     hm_to_reg,
 )
-from .dontek_client import DontekClient
+from .dontek_client import DontekClient, DontekWriteError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +43,9 @@ class DontekCoordinator(DataUpdateCoordinator[dict[int, int]]):
         self.client = DontekClient(mac)
         # HA-side Run Once duration (minutes); the number entity persists it.
         self.run_once_minutes = RUNONCE_DEFAULT_MIN
+        # held by the executor thread for a whole refresh, so a refresh left
+        # running past the timeout can't overlap the next one
+        self._refresh_lock = threading.Lock()
 
     async def async_connect(self) -> None:
         """Open the MQTT session (runs the blocking client in the executor)."""
@@ -54,6 +59,7 @@ class DontekCoordinator(DataUpdateCoordinator[dict[int, int]]):
         await self.hass.async_add_executor_job(_connect)
 
     async def async_shutdown(self) -> None:
+        await super().async_shutdown()
         await self.hass.async_add_executor_job(self.client.disconnect)
 
     async def _async_update_data(self) -> dict[int, int]:
@@ -86,14 +92,19 @@ class DontekCoordinator(DataUpdateCoordinator[dict[int, int]]):
             return True
 
         def _refresh() -> dict[int, int]:
-            # reconnect up front if the session looks down or creds are stale
-            self.client.ensure_session()
-            if not _poll_once():
-                # no fresh reply -> the connection is dead; rebuild and retry once
-                self.client.reconnect()
+            if not self._refresh_lock.acquire(blocking=False):
+                raise UpdateFailed("Previous refresh is still running")
+            try:
+                # reconnect up front if the session looks down or creds are stale
+                self.client.ensure_session()
                 if not _poll_once():
-                    raise UpdateFailed("No fresh reply from the Dontek cloud")
-            return dict(self.client.registers)
+                    # no fresh reply -> the connection is dead; rebuild and retry once
+                    self.client.reconnect()
+                    if not _poll_once():
+                        raise UpdateFailed("No fresh reply from the Dontek cloud")
+                return dict(self.client.registers)
+            finally:
+                self._refresh_lock.release()
 
         try:
             # hard ceiling so a wedged network thread can never stall the
@@ -111,9 +122,30 @@ class DontekCoordinator(DataUpdateCoordinator[dict[int, int]]):
             raise UpdateFailed("No register data received from controller yet")
         return regs
 
-    async def async_write_register(self, reg: int, value: int) -> None:
-        await self.hass.async_add_executor_job(self.client.write_register, reg, value)
+    async def _async_run_write(self, func, *args) -> None:  # noqa: ANN001
+        """Run a blocking write in the executor; show send failures in the UI."""
+        try:
+            await self.hass.async_add_executor_job(func, *args)
+        except DontekWriteError as err:
+            raise HomeAssistantError(f"Could not send to the pool controller: {err}") from err
         await self.async_request_refresh()
+
+    async def async_write_register(self, reg: int, value: int) -> None:
+        await self._async_run_write(self.client.write_register, reg, value)
+
+    async def async_update_bits(self, reg: int, set_bits: int, clear_bits: int) -> None:
+        """Set/clear bits of a register, using the newest known value.
+
+        Read and write happen together under the client's write lock, so two
+        quick toggles of different bits can't overwrite each other.
+        """
+        def _update() -> None:
+            with self.client.write_lock:
+                current = int(self.client.registers.get(reg, 0))
+                new = (current | set_bits) & ~clear_bits & 0xFFFF
+                self.client.write_register(reg, new)
+
+        await self._async_run_write(_update)
 
     async def async_run_once(self, minutes: int) -> None:
         """Start a one-shot run for ``minutes`` from the controller's current time."""
@@ -135,5 +167,4 @@ class DontekCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 self.client.write_register(reg, val)
                 time.sleep(1.8)
 
-        await self.hass.async_add_executor_job(_trigger)
-        await self.async_request_refresh()
+        await self._async_run_write(_trigger)
